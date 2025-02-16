@@ -5,8 +5,8 @@ A NodeMCU ESP8266 program to run DHT22 sensor and send the data to Blynk App.
 
 DHT22 Data > pin D7 ESP8266
 
-<img src="https://github.com/user-attachments/assets/301d0ada-3b9f-4bae-8ed0-0b1237bf88e2" alt="image" width="300">
-<img src="https://github.com/user-attachments/assets/47ae86db-b1f4-4929-836e-f5bd15e2d4bd" alt="image" width="350">
+<img src="https://github.com/user-attachments/assets/34303268-10ba-4395-a387-1a26e75ad294" alt="image" width="300">
+<img src="https://github.com/user-attachments/assets/fe96864b-4750-4365-a52a-b79724ae8521" alt="image" width="350">
 
 
 
