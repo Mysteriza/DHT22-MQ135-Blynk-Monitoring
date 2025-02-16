@@ -1,7 +1,7 @@
-# DHT22-Blynk-Monitoring
-A NodeMCU ESP8266 program to run DHT22 sensor and send the data to Blynk App.
+# DHT22-MQ135-Blynk-Monitoring
+A NodeMCU ESP8266 program to run DHT22 & MQ-135 sensor and send the data to Blynk App.
 
-## [Web App | Temperature & Humidity Monitoring](https://github.com/Mysteriza/WebApp-TempHum-Monitoring)
+## [Web App | Air Quality, Temperature & Humidity Monitoring](https://github.com/Mysteriza/WebApp-TempHum-Monitoring)
 
 DHT22 Data > pin D7 ESP8266
 
