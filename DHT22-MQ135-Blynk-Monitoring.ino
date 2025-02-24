@@ -17,7 +17,7 @@
 // WiFi and Blynk credentials
 char auth[] = "";  // Blynk authentication token
 char ssid[] = "";                        // WiFi SSID
-char pass[] = "";                             // WiFi password
+char pass[] = "";                        // WiFi password
 
 // Initialize objects
 DHT dht(DHTPIN, DHTTYPE);
@@ -27,12 +27,14 @@ WidgetRTC rtc;
 // Constants for gas compensation (adjusted for general accuracy)
 const float GAS_TEMP_COMPENSATION_FACTOR = 0.015;   // Temperature compensation factor
 const float GAS_HUMIDITY_COMPENSATION_FACTOR = 0.008; // Humidity compensation factor
-const float TEMP_OFFSET = -1.0;                     
-// Temperature offset to compensate MQ-135 heat (Since the two sensors are placed close together, the heat from the MQ-135 can make the DHT22 reading 1 degree higher. So it must be compensated -1 degree.)
 
 // WiFi reconnection variables
 unsigned long lastReconnectAttempt = 0;
 const unsigned long RECONNECT_INTERVAL = 5000; // 5 seconds between reconnect attempts
+
+// LED blinking variables
+bool sensorFailed = false; // Flag to track sensor failure
+bool ledState = HIGH;      // Current state of LED for blinking (HIGH = off, LOW = on)
 
 // Function: Check and Reconnect WiFi (Adaptive and Stable)
 void checkWiFi() {
@@ -79,6 +81,14 @@ String getAirQualityStatus(float compensated_gas) {
   else return "Very Poor";
 }
 
+// Function: Blink LED when sensor fails
+void blinkLED() {
+  if (sensorFailed) {
+    ledState = !ledState; // Toggle LED state
+    digitalWrite(LED_PIN, ledState);
+  }
+}
+
 // Function: Send Sensor Data to Blynk
 void sendSensorData() {
   // Read temperature and humidity from DHT22
@@ -89,12 +99,9 @@ void sendSensorData() {
   if (isnan(humidity) || isnan(temperature)) {
     Serial.println("Failed to read from DHT22 sensor!");
     Blynk.virtualWrite(V2, "Failed to read from DHT22 sensor!");
-    digitalWrite(LED_PIN, LOW); // LED on for error
+    sensorFailed = true; // Set failure flag
     return;
   }
-
-  // Apply temperature offset to compensate for MQ-135 heat
-  temperature += TEMP_OFFSET;
 
   // Read raw gas value from MQ-135 with averaging
   float raw_gas = readMQ135();
@@ -103,9 +110,12 @@ void sendSensorData() {
   if (raw_gas < 0 || raw_gas > 1023) {
     Serial.println("Failed to read from MQ-135 sensor!");
     Blynk.virtualWrite(V2, "Invalid MQ-135 sensor reading!");
-    digitalWrite(LED_PIN, LOW); // LED on for error
+    sensorFailed = true; // Set failure flag
     return;
   }
+
+  // If we reach here, sensors are working, so reset failure flag
+  sensorFailed = false;
 
   // Compensate gas value based on temperature and humidity
   float compensated_gas = raw_gas * 
@@ -115,11 +125,13 @@ void sendSensorData() {
   // Determine air quality status
   String airQualityStatus = getAirQualityStatus(compensated_gas);
 
-  // Control LED based on air quality
-  digitalWrite(LED_PIN, compensated_gas > 600 ? LOW : HIGH); // LED on if air quality is poor
+  // Control LED based on air quality if no sensor failure
+  if (!sensorFailed) {
+    digitalWrite(LED_PIN, compensated_gas > 600 ? LOW : HIGH); // LED on if air quality is poor
+  }
 
   // Send data to Blynk virtual pins
-  Blynk.virtualWrite(V0, temperature);           // Temperature with offset
+  Blynk.virtualWrite(V0, temperature);           // Temperature
   Blynk.virtualWrite(V1, humidity);             // Humidity
   Blynk.virtualWrite(V5, raw_gas);              // Raw gas value
   Blynk.virtualWrite(V6, compensated_gas);      // Compensated gas value
@@ -147,6 +159,7 @@ void setup() {
   // Schedule tasks
   timer.setInterval(10000L, sendSensorData); // Update every 10 seconds
   timer.setInterval(5000L, checkWiFi);       // Check WiFi every 5 seconds
+  timer.setInterval(300L, blinkLED);         // Blink LED every 0,3 seconds if sensor fails
 }
 
 // Loop Function
