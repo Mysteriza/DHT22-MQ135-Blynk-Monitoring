@@ -1,6 +1,6 @@
 // Definitions and Initial Configuration
-#define BLYNK_TEMPLATE_ID ""
-#define BLYNK_TEMPLATE_NAME ""
+#define BLYNK_TEMPLATE_ID "TMPLxyk260wi"
+#define BLYNK_TEMPLATE_NAME "Quickstart Template"
 
 #include <ESP8266WiFi.h>
 #include <BlynkSimpleEsp8266.h>
@@ -15,9 +15,9 @@
 #define LED_PIN D0         // Onboard LED pin (active low)
 
 // WiFi and Blynk credentials
-char auth[] = "";  // Blynk authentication token
-char ssid[] = "";                        // WiFi SSID
-char pass[] = "";                        // WiFi password
+char auth[] = "mnBmj5aj0LEKUdghiHnG81HKlt1aDFMR";  // Blynk authentication token
+char ssid[] = "Kosan bu nata";                        // WiFi SSID
+char pass[] = "immodium";                             // WiFi password
 
 // Initialize objects
 DHT dht(DHTPIN, DHTTYPE);
@@ -32,9 +32,8 @@ const float GAS_HUMIDITY_COMPENSATION_FACTOR = 0.008; // Humidity compensation f
 unsigned long lastReconnectAttempt = 0;
 const unsigned long RECONNECT_INTERVAL = 5000; // 5 seconds between reconnect attempts
 
-// LED blinking variables
+// LED control variables
 bool sensorFailed = false; // Flag to track sensor failure
-bool ledState = HIGH;      // Current state of LED for blinking (HIGH = off, LOW = on)
 
 // Function: Check and Reconnect WiFi (Adaptive and Stable)
 void checkWiFi() {
@@ -81,12 +80,21 @@ String getAirQualityStatus(float compensated_gas) {
   else return "Very Poor";
 }
 
-// Function: Blink LED when sensor fails
-void blinkLED() {
-  if (sensorFailed) {
-    ledState = !ledState; // Toggle LED state
-    digitalWrite(LED_PIN, ledState);
+// Function: Blink LED 3 times for sensor failure
+void blinkLEDForFailure() {
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_PIN, LOW);  // LED on
+    delay(500);                  // Wait 500ms
+    digitalWrite(LED_PIN, HIGH); // LED off
+    delay(500);                  // Wait 500ms
   }
+}
+
+// Function: Turn LED on for 3 seconds for poor air quality
+void ledOnForPoorAirQuality() {
+  digitalWrite(LED_PIN, LOW);  // LED on
+  delay(3000);                 // Stay on for 3 seconds
+  digitalWrite(LED_PIN, HIGH); // LED off
 }
 
 // Function: Send Sensor Data to Blynk
@@ -99,7 +107,8 @@ void sendSensorData() {
   if (isnan(humidity) || isnan(temperature)) {
     Serial.println("Failed to read from DHT22 sensor!");
     Blynk.virtualWrite(V2, "Failed to read from DHT22 sensor!");
-    sensorFailed = true; // Set failure flag
+    sensorFailed = true;
+    blinkLEDForFailure(); // Blink LED 3 times
     return;
   }
 
@@ -110,7 +119,8 @@ void sendSensorData() {
   if (raw_gas < 0 || raw_gas > 1023) {
     Serial.println("Failed to read from MQ-135 sensor!");
     Blynk.virtualWrite(V2, "Invalid MQ-135 sensor reading!");
-    sensorFailed = true; // Set failure flag
+    sensorFailed = true;
+    blinkLEDForFailure(); // Blink LED 3 times
     return;
   }
 
@@ -126,8 +136,10 @@ void sendSensorData() {
   String airQualityStatus = getAirQualityStatus(compensated_gas);
 
   // Control LED based on air quality if no sensor failure
-  if (!sensorFailed) {
-    digitalWrite(LED_PIN, compensated_gas > 600 ? LOW : HIGH); // LED on if air quality is poor
+  if (!sensorFailed && compensated_gas > 600) {
+    ledOnForPoorAirQuality(); // LED on for 3 seconds if air quality is poor
+  } else {
+    digitalWrite(LED_PIN, HIGH); // LED off otherwise
   }
 
   // Send data to Blynk virtual pins
@@ -157,9 +169,8 @@ void setup() {
   rtc.begin();                    // Initialize real-time clock
   
   // Schedule tasks
-  timer.setInterval(10000L, sendSensorData); // Update every 10 seconds
+  timer.setInterval(20000L, sendSensorData); // Update every 20 seconds
   timer.setInterval(5000L, checkWiFi);       // Check WiFi every 5 seconds
-  timer.setInterval(300L, blinkLED);         // Blink LED every 0,3 seconds if sensor fails
 }
 
 // Loop Function
