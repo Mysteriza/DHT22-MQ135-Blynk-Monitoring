@@ -1,6 +1,5 @@
-// Definitions and Initial Configuration
-#define BLYNK_TEMPLATE_ID "TMPLxyk260wi"
-#define BLYNK_TEMPLATE_NAME "Quickstart Template"
+#define BLYNK_TEMPLATE_ID ""
+#define BLYNK_TEMPLATE_NAME ""
 
 #include <ESP8266WiFi.h>
 #include <BlynkSimpleEsp8266.h>
@@ -10,53 +9,55 @@
 
 // Pin definitions
 #define DHTPIN D7          // GPIO pin for DHT22 sensor
-#define DHTTYPE DHT22      // Type of DHT sensor (DHT22)
+#define DHTTYPE DHT22      // DHT22 sensor type
 #define MQ135_PIN A0       // Analog pin for MQ-135 sensor
 #define LED_PIN D0         // Onboard LED pin (active low)
 
 // WiFi and Blynk credentials
-char auth[] = "mnBmj5aj0LEKUdghiHnG81HKlt1aDFMR";  // Blynk authentication token
-char ssid[] = "Kosan bu nata";                        // WiFi SSID
-char pass[] = "immodium";                             // WiFi password
+char auth[] = "";
+char ssid[] = "";
+char pass[] = "";
 
 // Initialize objects
 DHT dht(DHTPIN, DHTTYPE);
 BlynkTimer timer;
 WidgetRTC rtc;
 
-// Constants for gas compensation (adjusted for general accuracy)
-const float GAS_TEMP_COMPENSATION_FACTOR = 0.015;   // Temperature compensation factor
-const float GAS_HUMIDITY_COMPENSATION_FACTOR = 0.008; // Humidity compensation factor
+// Constants for gas compensation
+const float GAS_TEMP_COMPENSATION_FACTOR = 0.015;
+const float GAS_HUMIDITY_COMPENSATION_FACTOR = 0.008;
 
-// WiFi reconnection variables
-unsigned long lastReconnectAttempt = 0;
-const unsigned long RECONNECT_INTERVAL = 5000; // 5 seconds between reconnect attempts
+// Reconnection variables
+unsigned long lastWiFiReconnectAttempt = 0;
+unsigned long lastBlynkReconnectAttempt = 0;
+const unsigned long RECONNECT_INTERVAL = 5000;  // 5 seconds for WiFi
+const unsigned long BLYNK_RECONNECT_INTERVAL = 10000;  // 10 seconds for Blynk
 
-// LED control variables
-bool sensorFailed = false; // Flag to track sensor failure
-
-// Function: Check and Reconnect WiFi (Adaptive and Stable)
+// Function: Check and Reconnect WiFi
 void checkWiFi() {
-  if (WiFi.status() != WL_CONNECTED) {
-    if (millis() - lastReconnectAttempt > RECONNECT_INTERVAL) {
-      lastReconnectAttempt = millis();
-      Serial.println("WiFi disconnected. Attempting to reconnect...");
-      WiFi.disconnect(); // Ensure clean disconnect before reconnect
-      WiFi.begin(ssid, pass);
+  if (WiFi.status() != WL_CONNECTED && millis() - lastWiFiReconnectAttempt > RECONNECT_INTERVAL) {
+    lastWiFiReconnectAttempt = millis();
+    Serial.println("WiFi disconnected. Attempting to reconnect...");
+    WiFi.disconnect();
+    WiFi.begin(ssid, pass);
+    Blynk.virtualWrite(V2, "WiFi Disconnected - Reconnecting...");
+    timer.setTimeout(5000L, []() {
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("WiFi reconnected successfully!");
+        Blynk.virtualWrite(V2, "WiFi Reconnected!");
+      }
+    });
+  }
+}
 
-      // Update status on Blynk
-      Blynk.virtualWrite(V2, "WiFi Disconnected - Reconnecting...");
-
-      // Check connection status after 5 seconds
-      timer.setTimeout(5000L, []() {
-        if (WiFi.status() == WL_CONNECTED) {
-          Serial.println("WiFi reconnected successfully!");
-          Blynk.virtualWrite(V2, "WiFi Reconnected!");
-        } else {
-          Serial.println("Still trying to reconnect...");
-        }
-      });
-    }
+// Function: Check and Reconnect Blynk
+void checkBlynkConnection() {
+  if (!Blynk.connected() && millis() - lastBlynkReconnectAttempt > BLYNK_RECONNECT_INTERVAL) {
+    lastBlynkReconnectAttempt = millis();
+    Serial.println("Blynk disconnected. Attempting to reconnect...");
+    Blynk.disconnect();
+    Blynk.begin(auth, ssid, pass);
+    Blynk.virtualWrite(V2, "Blynk Disconnected - Reconnecting...");
   }
 }
 
@@ -66,7 +67,7 @@ float readMQ135() {
   int total = 0;
   for (int i = 0; i < SAMPLES; i++) {
     total += analogRead(MQ135_PIN);
-    delay(10); // Small delay for ADC stability
+    delay(10);
   }
   return total / (float)SAMPLES;
 }
@@ -97,99 +98,84 @@ void ledOnForPoorAirQuality() {
   digitalWrite(LED_PIN, HIGH); // LED off
 }
 
+// Function: Check if it's night time (21:00 to 06:00)
+bool isNightTime() {
+  int currentHour = hour();
+  return (currentHour >= 21 || currentHour < 6);
+}
+
 // Function: Send Sensor Data to Blynk
 void sendSensorData() {
-  // Read temperature and humidity from DHT22
   float humidity = dht.readHumidity();
   float temperature = dht.readTemperature();
 
-  // Validate DHT22 readings
   if (isnan(humidity) || isnan(temperature)) {
     Serial.println("Failed to read from DHT22 sensor!");
     Blynk.virtualWrite(V2, "Failed to read from DHT22 sensor!");
-    sensorFailed = true;
-    blinkLEDForFailure(); // Blink LED 3 times
+    if (!isNightTime()) blinkLEDForFailure(); // Blink LED only outside night hours
     return;
   }
 
-  // Read raw gas value from MQ-135 with averaging
   float raw_gas = readMQ135();
-
-  // Validate MQ-135 reading
   if (raw_gas < 0 || raw_gas > 1023) {
     Serial.println("Failed to read from MQ-135 sensor!");
     Blynk.virtualWrite(V2, "Invalid MQ-135 sensor reading!");
-    sensorFailed = true;
-    blinkLEDForFailure(); // Blink LED 3 times
+    if (!isNightTime()) blinkLEDForFailure(); // Blink LED only outside night hours
     return;
   }
 
-  // If we reach here, sensors are working, so reset failure flag
-  sensorFailed = false;
-
-  // Compensate gas value based on temperature and humidity
   float compensated_gas = raw_gas * 
                           (1.0 + ((temperature - 25.0) * GAS_TEMP_COMPENSATION_FACTOR)) * 
                           (1.0 + ((humidity - 40.0) * GAS_HUMIDITY_COMPENSATION_FACTOR));
 
-  // Determine air quality status
   String airQualityStatus = getAirQualityStatus(compensated_gas);
 
-  // Control LED based on air quality if no sensor failure
-  if (!sensorFailed && compensated_gas > 600) {
+  // LED control only outside night hours
+  if (!isNightTime() && compensated_gas > 600) {
     ledOnForPoorAirQuality(); // LED on for 3 seconds if air quality is poor
-  } else {
-    digitalWrite(LED_PIN, HIGH); // LED off otherwise
   }
 
-  // Send data to Blynk virtual pins
-  Blynk.virtualWrite(V0, temperature);           // Temperature
-  Blynk.virtualWrite(V1, humidity);             // Humidity
-  Blynk.virtualWrite(V5, raw_gas);              // Raw gas value
-  Blynk.virtualWrite(V6, compensated_gas);      // Compensated gas value
-  Blynk.virtualWrite(V7, airQualityStatus);     // Air quality status
+  Blynk.virtualWrite(V0, temperature);
+  Blynk.virtualWrite(V1, humidity);
+  Blynk.virtualWrite(V5, raw_gas);
+  Blynk.virtualWrite(V6, compensated_gas);
+  Blynk.virtualWrite(V7, airQualityStatus);
 
-  // Send current time to Blynk
   String timeStr = String(hour()) + ":" + (minute() < 10 ? "0" + String(minute()) : String(minute()));
-  Blynk.virtualWrite(V4, timeStr);              // Formatted time
+  Blynk.virtualWrite(V4, timeStr);
 
-  // Update status to "Latest Update!" on successful read
   Blynk.virtualWrite(V2, "Latest Update!");
 }
 
 // Setup Function
 void setup() {
-  Serial.begin(115200);  // Initialize Serial Monitor
+  Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH); // LED off (active low)
-  
-  // Connect to Blynk and WiFi
-  Blynk.begin(auth, ssid, pass);  
-  dht.begin();                    // Initialize DHT22 sensor
-  rtc.begin();                    // Initialize real-time clock
-  
-  // Schedule tasks
-  timer.setInterval(20000L, sendSensorData); // Update every 20 seconds
-  timer.setInterval(5000L, checkWiFi);       // Check WiFi every 5 seconds
+  Blynk.begin(auth, ssid, pass);
+  dht.begin();
+  rtc.begin();
+
+  timer.setInterval(20000L, sendSensorData);      // Update every 20 seconds
+  timer.setInterval(5000L, checkWiFi);           // Check WiFi every 5 seconds
+  timer.setInterval(10000L, checkBlynkConnection); // Check Blynk every 10 seconds
 }
 
-// Loop Function
 void loop() {
-  Blynk.run();  // Process Blynk communication
-  timer.run();  // Run scheduled tasks
+  Blynk.run();
+  timer.run();
 }
 
 // Callback: Handle Button Press on Blynk App
 BLYNK_WRITE(V3) {
-  int buttonState = param.asInt();  // Read button state
-  if (buttonState == 1) {
-    sendSensorData();  // Send sensor data immediately
+  if (param.asInt() == 1) {
+    sendSensorData();
   }
 }
 
 // Callback: Synchronize Time When Connected to Blynk
 BLYNK_CONNECTED() {
-  rtc.begin();  // Synchronize real-time clock
+  rtc.begin();
   Serial.println("Connected to Blynk!");
   Blynk.virtualWrite(V2, "Connected to Blynk!");
 }
