@@ -1,5 +1,5 @@
-#define BLYNK_TEMPLATE_ID ""
-#define BLYNK_TEMPLATE_NAME ""
+#define BLYNK_TEMPLATE_ID "TMPLxyk260wi"
+#define BLYNK_TEMPLATE_NAME "Quickstart Template"
 
 #include <ESP8266WiFi.h>
 #include <BlynkSimpleEsp8266.h>
@@ -14,26 +14,30 @@
 #define LED_PIN D0         // Onboard LED pin (active low)
 
 // WiFi and Blynk credentials
-char auth[] = "";
-char ssid[] = "";
-char pass[] = "";
+char auth[] = "mnBmj5aj0LEKUdghiHnG81HKlt1aDFMR";
+char ssid[] = "Kosan bu nata";
+char pass[] = "immodium";
 
 // Initialize objects
 DHT dht(DHTPIN, DHTTYPE);
 BlynkTimer timer;
 WidgetRTC rtc;
 
-// Constants for gas compensation
+// Constants
 const float GAS_TEMP_COMPENSATION_FACTOR = 0.015;
 const float GAS_HUMIDITY_COMPENSATION_FACTOR = 0.008;
+const unsigned long RECONNECT_INTERVAL = 5000;      // 5 seconds for WiFi
+const unsigned long BLYNK_RECONNECT_INTERVAL = 10000; // 10 seconds for Blynk
 
 // Reconnection variables
 unsigned long lastWiFiReconnectAttempt = 0;
 unsigned long lastBlynkReconnectAttempt = 0;
-const unsigned long RECONNECT_INTERVAL = 5000;  // 5 seconds for WiFi
-const unsigned long BLYNK_RECONNECT_INTERVAL = 10000;  // 10 seconds for Blynk
 
-// Function: Check and Reconnect WiFi
+// LED control variables
+unsigned long ledStartTime = 0;
+bool ledActive = false;
+
+// Check and reconnect WiFi
 void checkWiFi() {
   if (WiFi.status() != WL_CONNECTED && millis() - lastWiFiReconnectAttempt > RECONNECT_INTERVAL) {
     lastWiFiReconnectAttempt = millis();
@@ -50,7 +54,7 @@ void checkWiFi() {
   }
 }
 
-// Function: Check and Reconnect Blynk
+// Check and reconnect Blynk
 void checkBlynkConnection() {
   if (!Blynk.connected() && millis() - lastBlynkReconnectAttempt > BLYNK_RECONNECT_INTERVAL) {
     lastBlynkReconnectAttempt = millis();
@@ -61,7 +65,7 @@ void checkBlynkConnection() {
   }
 }
 
-// Function: Read MQ-135 with Averaging
+// Read MQ-135 with averaging
 float readMQ135() {
   const int SAMPLES = 5;
   int total = 0;
@@ -72,47 +76,59 @@ float readMQ135() {
   return total / (float)SAMPLES;
 }
 
-// Function: Get Air Quality Status
+// Get air quality status
 String getAirQualityStatus(float compensated_gas) {
   if (compensated_gas <= 200) return "Very Good";
-  else if (compensated_gas <= 400) return "Good";
-  else if (compensated_gas <= 600) return "Fair";
-  else if (compensated_gas <= 800) return "Poor";
-  else return "Very Poor";
+  if (compensated_gas <= 400) return "Good";
+  if (compensated_gas <= 600) return "Fair";
+  if (compensated_gas <= 800) return "Poor";
+  return "Very Poor";
 }
 
-// Function: Blink LED 3 times for sensor failure
-void blinkLEDForFailure() {
-  for (int i = 0; i < 3; i++) {
-    digitalWrite(LED_PIN, LOW);  // LED on
-    delay(500);                  // Wait 500ms
-    digitalWrite(LED_PIN, HIGH); // LED off
-    delay(500);                  // Wait 500ms
+// Check if it's night time (19:00 to 07:00)
+bool isNightTime() {
+  if (!timeStatus() == timeSet) return false; // Default to daytime if time not synced
+  int currentHour = hour();
+  return (currentHour >= 19 || currentHour < 7);
+}
+
+// Handle LED blinking or solid on (non-blocking)
+void updateLED(bool sensorFailure, bool poorAirQuality) {
+  if (isNightTime() || ledActive) return; // Skip if night mode or LED already active
+
+  if (sensorFailure) {
+    ledActive = true;
+    ledStartTime = millis();
+    timer.setTimer(500L, []() {
+      static int blinkCount = 0;
+      digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Toggle LED
+      blinkCount++;
+      if (blinkCount >= 6) { // 3 full blinks (6 toggles)
+        digitalWrite(LED_PIN, HIGH);
+        ledActive = false;
+        blinkCount = 0;
+        return false; // Stop timer
+      }
+      return true; // Continue timer
+    }, 6);
+  } else if (poorAirQuality) {
+    ledActive = true;
+    digitalWrite(LED_PIN, LOW);
+    timer.setTimeout(3000L, []() {
+      digitalWrite(LED_PIN, HIGH);
+      ledActive = false;
+    });
   }
 }
 
-// Function: Turn LED on for 3 seconds for poor air quality
-void ledOnForPoorAirQuality() {
-  digitalWrite(LED_PIN, LOW);  // LED on
-  delay(3000);                 // Stay on for 3 seconds
-  digitalWrite(LED_PIN, HIGH); // LED off
-}
-
-// Function: Check if it's night time (21:00 to 06:00)
-bool isNightTime() {
-  int currentHour = hour();
-  return (currentHour >= 21 || currentHour < 6);
-}
-
-// Function: Send Sensor Data to Blynk
+// Send sensor data to Blynk
 void sendSensorData() {
   float humidity = dht.readHumidity();
   float temperature = dht.readTemperature();
-
   if (isnan(humidity) || isnan(temperature)) {
     Serial.println("Failed to read from DHT22 sensor!");
     Blynk.virtualWrite(V2, "Failed to read from DHT22 sensor!");
-    if (!isNightTime()) blinkLEDForFailure(); // Blink LED only outside night hours
+    updateLED(true, false);
     return;
   }
 
@@ -120,20 +136,16 @@ void sendSensorData() {
   if (raw_gas < 0 || raw_gas > 1023) {
     Serial.println("Failed to read from MQ-135 sensor!");
     Blynk.virtualWrite(V2, "Invalid MQ-135 sensor reading!");
-    if (!isNightTime()) blinkLEDForFailure(); // Blink LED only outside night hours
+    updateLED(true, false);
     return;
   }
 
   float compensated_gas = raw_gas * 
                           (1.0 + ((temperature - 25.0) * GAS_TEMP_COMPENSATION_FACTOR)) * 
                           (1.0 + ((humidity - 40.0) * GAS_HUMIDITY_COMPENSATION_FACTOR));
-
   String airQualityStatus = getAirQualityStatus(compensated_gas);
 
-  // LED control only outside night hours
-  if (!isNightTime() && compensated_gas > 600) {
-    ledOnForPoorAirQuality(); // LED on for 3 seconds if air quality is poor
-  }
+  updateLED(false, compensated_gas > 600);
 
   Blynk.virtualWrite(V0, temperature);
   Blynk.virtualWrite(V1, humidity);
@@ -141,24 +153,24 @@ void sendSensorData() {
   Blynk.virtualWrite(V6, compensated_gas);
   Blynk.virtualWrite(V7, airQualityStatus);
 
-  String timeStr = String(hour()) + ":" + (minute() < 10 ? "0" + String(minute()) : String(minute()));
+  char timeStr[6];
+  sprintf(timeStr, "%02d:%02d", hour(), minute());
   Blynk.virtualWrite(V4, timeStr);
 
   Blynk.virtualWrite(V2, "Latest Update!");
 }
 
-// Setup Function
 void setup() {
   Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH); // LED off (active low)
+  digitalWrite(LED_PIN, HIGH);
   Blynk.begin(auth, ssid, pass);
   dht.begin();
   rtc.begin();
 
-  timer.setInterval(20000L, sendSensorData);      // Update every 20 seconds
-  timer.setInterval(5000L, checkWiFi);           // Check WiFi every 5 seconds
-  timer.setInterval(10000L, checkBlynkConnection); // Check Blynk every 10 seconds
+  timer.setInterval(20000L, sendSensorData);
+  timer.setInterval(5000L, checkWiFi);
+  timer.setInterval(10000L, checkBlynkConnection);
 }
 
 void loop() {
@@ -166,14 +178,10 @@ void loop() {
   timer.run();
 }
 
-// Callback: Handle Button Press on Blynk App
 BLYNK_WRITE(V3) {
-  if (param.asInt() == 1) {
-    sendSensorData();
-  }
+  if (param.asInt() == 1) sendSensorData();
 }
 
-// Callback: Synchronize Time When Connected to Blynk
 BLYNK_CONNECTED() {
   rtc.begin();
   Serial.println("Connected to Blynk!");
