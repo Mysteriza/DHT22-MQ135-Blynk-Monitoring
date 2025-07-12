@@ -24,8 +24,13 @@ BlynkTimer timer;
 WidgetRTC rtc;
 
 // Constants
-const float GAS_TEMP_COMPENSATION_FACTOR = 0.015;
-const float GAS_HUMIDITY_COMPENSATION_FACTOR = 0.008;
+const float R0 = 400.0; // Initial baseline resistance (will adjust naturally over 24-48 hours)
+const float A_COEFFICIENT = 110.0; // Constant for CO2 (adjust based on calibration)
+const float B_COEFFICIENT = -2.5;  // Exponent for CO2 (adjust based on calibration)
+const float TEMP_BASELINE = 27.5;  // Adjusted to average room temperature based on your room
+const float HUMIDITY_BASELINE = 60.0; // Adjusted to average humidity based on your room
+const float TEMP_SENSITIVITY = 0.04; // Sensitivity to temperature change (approx. 4% per °C)
+const float HUMIDITY_SENSITIVITY = 0.02; // Sensitivity to humidity change (approx. 2% per %)
 const unsigned long RECONNECT_INTERVAL = 5000;      // 5 seconds for WiFi
 const unsigned long BLYNK_RECONNECT_INTERVAL = 10000; // 10 seconds for Blynk
 
@@ -41,13 +46,13 @@ bool ledActive = false;
 void checkWiFi() {
   if (WiFi.status() != WL_CONNECTED && millis() - lastWiFiReconnectAttempt > RECONNECT_INTERVAL) {
     lastWiFiReconnectAttempt = millis();
-    Serial.println("WiFi disconnected. Attempting to reconnect...");
+    // Serial.println("WiFi disconnected. Attempting to reconnect...");
     WiFi.disconnect();
     WiFi.begin(ssid, pass);
     Blynk.virtualWrite(V2, "WiFi Disconnected - Reconnecting...");
     timer.setTimeout(5000L, []() {
       if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("WiFi reconnected successfully!");
+        // Serial.println("WiFi reconnected successfully!");
         Blynk.virtualWrite(V2, "WiFi Reconnected!");
       }
     });
@@ -58,7 +63,7 @@ void checkWiFi() {
 void checkBlynkConnection() {
   if (!Blynk.connected() && millis() - lastBlynkReconnectAttempt > BLYNK_RECONNECT_INTERVAL) {
     lastBlynkReconnectAttempt = millis();
-    Serial.println("Blynk disconnected. Attempting to reconnect...");
+    // Serial.println("Blynk disconnected. Attempting to reconnect...");
     Blynk.disconnect();
     Blynk.begin(auth, ssid, pass);
     Blynk.virtualWrite(V2, "Blynk Disconnected - Reconnecting...");
@@ -76,12 +81,29 @@ float readMQ135() {
   return total / (float)SAMPLES;
 }
 
-// Get air quality status
+// Calculate compensated gas concentration in ppm
+float calculateCompensatedGas(float raw_gas, float temperature, float humidity) {
+  // Adjust raw gas reading based on temperature and humidity
+  float tempFactor = 1.0 + ((temperature - TEMP_BASELINE) * TEMP_SENSITIVITY);
+  float humidFactor = 1.0 + ((humidity - HUMIDITY_BASELINE) * HUMIDITY_SENSITIVITY);
+  float adjustedRs = raw_gas * tempFactor * humidFactor;
+
+  // Convert to gas concentration (ppm) using simplified MQ-135 model
+  // Serial.print("Debug - adjustedRs: "); Serial.print(adjustedRs);
+  // Serial.print(", ratio: "); Serial.println(adjustedRs / R0);
+  float ratio = adjustedRs / R0;
+  float concentration = A_COEFFICIENT * pow(ratio, B_COEFFICIENT);
+
+  // Limit to realistic range for CO2 (10-1000 ppm)
+  return constrain(concentration, 10.0, 1000.0);
+}
+
+// Get air quality status based on gas concentration
 String getAirQualityStatus(float compensated_gas) {
-  if (compensated_gas <= 200) return "Very Good";
-  if (compensated_gas <= 400) return "Good";
-  if (compensated_gas <= 600) return "Fair";
-  if (compensated_gas <= 800) return "Poor";
+  if (compensated_gas <= 400) return "Very Good";  // ~400 ppm is typical outdoor CO2
+  if (compensated_gas <= 600) return "Good";
+  if (compensated_gas <= 800) return "Fair";
+  if (compensated_gas <= 1000) return "Poor";
   return "Very Poor";
 }
 
@@ -121,12 +143,23 @@ void updateLED(bool sensorFailure, bool poorAirQuality) {
   }
 }
 
-// Send sensor data to Blynk
+// Send sensor data to Blynk with retry for DHT22
 void sendSensorData() {
-  float humidity = dht.readHumidity();
-  float temperature = dht.readTemperature();
+  float humidity, temperature;
+  int retryCount = 0;
+  const int MAX_RETRIES = 3;
+
+  do {
+    humidity = dht.readHumidity();
+    temperature = dht.readTemperature();
+    retryCount++;
+    if (isnan(humidity) || isnan(temperature)) {
+      delay(500); // Wait before retry
+    }
+  } while ((isnan(humidity) || isnan(temperature)) && retryCount < MAX_RETRIES);
+
   if (isnan(humidity) || isnan(temperature)) {
-    Serial.println("Failed to read from DHT22 sensor!");
+    // Serial.println("Failed to read from DHT22 sensor after retries!");
     Blynk.virtualWrite(V2, "Failed to read from DHT22 sensor!");
     updateLED(true, false);
     return;
@@ -134,18 +167,16 @@ void sendSensorData() {
 
   float raw_gas = readMQ135();
   if (raw_gas < 0 || raw_gas > 1023) {
-    Serial.println("Failed to read from MQ-135 sensor!");
+    // Serial.println("Failed to read from MQ-135 sensor!");
     Blynk.virtualWrite(V2, "Invalid MQ-135 sensor reading!");
     updateLED(true, false);
     return;
   }
 
-  float compensated_gas = raw_gas * 
-                          (1.0 + ((temperature - 25.0) * GAS_TEMP_COMPENSATION_FACTOR)) * 
-                          (1.0 + ((humidity - 40.0) * GAS_HUMIDITY_COMPENSATION_FACTOR));
+  float compensated_gas = calculateCompensatedGas(raw_gas, temperature, humidity);
   String airQualityStatus = getAirQualityStatus(compensated_gas);
 
-  updateLED(false, compensated_gas > 600);
+  updateLED(false, compensated_gas > 800); // Adjusted threshold for poor air quality
 
   Blynk.virtualWrite(V0, temperature);
   Blynk.virtualWrite(V1, humidity);
@@ -161,7 +192,7 @@ void sendSensorData() {
 }
 
 void setup() {
-  Serial.begin(115200);
+  // Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);
   Blynk.begin(auth, ssid, pass);
@@ -184,6 +215,6 @@ BLYNK_WRITE(V3) {
 
 BLYNK_CONNECTED() {
   rtc.begin();
-  Serial.println("Connected to Blynk!");
+  // Serial.println("Connected to Blynk!");
   Blynk.virtualWrite(V2, "Connected to Blynk!");
 }
